@@ -9,6 +9,7 @@ import unicodedata
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from xml.etree import ElementTree as ET
 
 import requests
 from bs4 import BeautifulSoup
@@ -135,6 +136,76 @@ def extract_items(html: str) -> list[dict]:
 	return items
 
 
+def fetch_issue_urls_from_sitemap() -> list[dict]:
+	"""sitemap_issues.xml から issue のURLと最終更新日を取得。
+	戻り値: [{id, url, lastmod}] のリスト
+	"""
+	sm_url = f"{BASE_ORIGIN}/sitemap_issues.xml"
+	resp = requests.get(sm_url, headers=HEADERS, timeout=20)
+	if resp.status_code != 200 or not resp.text:
+		return []
+	try:
+		root = ET.fromstring(resp.text)
+		ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+		entries = []
+		for url_el in root.findall("{http://www.sitemaps.org/schemas/sitemap/0.9}url"):
+			loc_el = url_el.find("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
+			lastmod_el = url_el.find("{http://www.sitemaps.org/schemas/sitemap/0.9}lastmod")
+			if loc_el is None:
+				continue
+			url = loc_el.text.strip()
+			m = re.search(r"/issue/(\d+)/?", url)
+			if not m:
+				continue
+			issue_id = m.group(1)
+			lastmod = (lastmod_el.text.strip() if lastmod_el is not None else "")
+			entries.append({"id": issue_id, "url": url, "lastmod": lastmod})
+		return entries
+	except Exception:
+		return []
+
+
+def build_items_from_sitemap(max_fetch: int = 30) -> list[dict]:
+	"""sitemap_issues.xml を基に、各案件ページの <title> からタイトルを取得。
+	robots.txt の Crawl-delay=1 を尊重して1秒間隔で取得します。
+	"""
+	entries = fetch_issue_urls_from_sitemap()
+	if not entries:
+		return []
+	# lastmod 降順で新しいものから取得
+	def to_key(e: dict) -> str:
+		return e.get("lastmod", "")
+	entries.sort(key=to_key, reverse=True)
+	selected = entries[:max_fetch]
+	items: list[dict] = []
+	for i, ent in enumerate(selected, 1):
+		url = ent["url"]
+		try:
+			resp = requests.get(url, headers=HEADERS, timeout=20)
+			if resp.status_code != 200:
+				continue
+			soup = BeautifulSoup(resp.text, "html.parser")
+			# <title>XXX | スポットコンサル[ビザスク]
+			title_tag = soup.find("title")
+			title = title_tag.get_text(strip=True) if title_tag else ""
+			# サイト名のサフィックスは落とす
+			title = re.sub(r"\s*\|\s*.*$", "", title)
+			items.append({
+				"id": ent["id"],
+				"url": url,
+				"title": title,
+				"description": "",
+				"labels": [],
+				"created": ent.get("lastmod", ""),
+				"due": "",
+				"reward": "",
+			})
+		finally:
+			# Crawl-delay
+			time.sleep(1)
+	return items
+
+
 def filter_new_and_match(items: list[dict], seen_ids: set) -> list[dict]:
 	"""
 	1) 未通知（idが未登録）のみ
@@ -226,6 +297,10 @@ def main():
 	seen = load_seen_ids()
 	html = fetch_html(TARGET_URL)
 	items = extract_items(html)
+	# 一覧がJS描画等で0件の場合、sitemapフォールバック
+	if not items:
+		print("[INFO] 一覧から抽出0件。sitemap経由で取得します…")
+		items = build_items_from_sitemap(max_fetch=50)
 	matches = filter_new_and_match(items, seen)
 
 	# 一致があったときのみ通知
