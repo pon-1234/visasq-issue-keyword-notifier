@@ -35,6 +35,10 @@ HEADERS = {
 	"Accept-Language": "ja-JP,ja;q=0.9",
 }
 
+# テスト用フラグ（環境変数）
+FORCE_NOTIFY = os.getenv("FORCE_NOTIFY") == "1"  # 既読無視で通知
+DRY_RUN = os.getenv("DRY_RUN") == "1"            # Slack送信せずpayload出力のみ
+
 
 def load_seen_ids() -> set:
 	STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -301,16 +305,22 @@ def main():
 	if not items:
 		print("[INFO] 一覧から抽出0件。sitemap経由で取得します…")
 		items = build_items_from_sitemap(max_fetch=50)
-	matches = filter_new_and_match(items, seen)
+	# テスト時は既読を無視
+	effective_seen = set() if FORCE_NOTIFY else seen
+	matches = filter_new_and_match(items, effective_seen)
 
 	# 一致があったときのみ通知
 	if matches:
 		payload = build_slack_blocks(matches)
-		post_to_slack(payload)
-		# 通知したIDを既読に追加
-		for it in matches:
-			seen.add(it["id"])
-		save_seen_ids(seen)
+		if DRY_RUN:
+			print(json.dumps(payload, ensure_ascii=False, indent=2))
+		else:
+			post_to_slack(payload)
+		# 通知したIDを既読に追加（FORCE時はスキップ）
+		if not FORCE_NOTIFY:
+			for it in matches:
+				seen.add(it["id"])
+			save_seen_ids(seen)
 	else:
 		print("一致なし：Slack通知はスキップしました。")
 
