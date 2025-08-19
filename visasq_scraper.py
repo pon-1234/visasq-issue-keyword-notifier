@@ -38,7 +38,6 @@ HEADERS = {
 # テスト用フラグ（環境変数）
 FORCE_NOTIFY = os.getenv("FORCE_NOTIFY") == "1"  # 既読無視で通知
 DRY_RUN = os.getenv("DRY_RUN") == "1"            # Slack送信せずpayload出力のみ
-ALWAYS_NOTIFY_ZERO = os.getenv("ALWAYS_NOTIFY_ZERO") == "1"  # 0件でも通知
 
 
 def load_seen_ids() -> set:
@@ -323,14 +322,7 @@ def main():
 				seen.add(it["id"])
 			save_seen_ids(seen)
 	else:
-		if ALWAYS_NOTIFY_ZERO:
-			payload = build_slack_blocks([])
-			if DRY_RUN:
-				print(json.dumps(payload, ensure_ascii=False, indent=2))
-			else:
-				post_to_slack(payload)
-		else:
-			print("一致なし：Slack通知はスキップしました。")
+		print("一致なし：Slack通知はスキップしました。")
 
 
 if __name__ == "__main__":
