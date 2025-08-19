@@ -32,6 +32,7 @@ jobs:
       - name: Run scraper
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          ALWAYS_NOTIFY_ZERO: ${{ vars.ALWAYS_NOTIFY_ZERO || '0' }}
         run: |
           python visasq_scraper.py
 
