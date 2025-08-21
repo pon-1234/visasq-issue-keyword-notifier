@@ -119,13 +119,21 @@ def extract_items(html: str) -> list[dict]:
 		for li in a.find_all("li"):
 			qa = li.get("qa-content", "")
 			txt = li.get_text(" ", strip=True)
+			# アイコンのclassを確認（例: i-mdi-tag / i-mdi-calendar-month）
+			icon = li.find("i")
+			icon_classes = " ".join(icon.get("class", [])) if icon else ""
 			if qa == "created":
 				# 例: "作成日: 2025年08月18日"
 				created = txt.replace("作成日:", "").strip()
-			elif qa == "due-date":
-				due = txt
-			elif "¥" in txt and not reward:
-				reward = txt
+			# 締切（due）は qa="due-date" またはカレンダーアイコンで判定
+			if not due and (qa == "due-date" or "i-mdi-calendar-month" in icon_classes or "i-mdi-calendar" in icon_classes):
+				sp = li.find("span")
+				due = (sp.get_text(" ", strip=True) if sp else txt).strip()
+			# 報酬（reward）は通貨記号 or タグアイコンで判定
+			if not reward and ("¥" in txt or "i-mdi-tag" in icon_classes):
+				# 金額だけを抜き出せれば抜く
+				mny = re.search(r"¥[\d,]+(?:\s*〜\s*¥[\d,]+)?", txt)
+				reward = (mny.group(0) if mny else txt).strip()
 
 		items.append({
 			"id": issue_id,
@@ -194,15 +202,32 @@ def build_items_from_sitemap(max_fetch: int = 30) -> list[dict]:
 			title = title_tag.get_text(strip=True) if title_tag else ""
 			# サイト名のサフィックスは落とす
 			title = re.sub(r"\s*\|\s*.*$", "", title)
+			# 一覧と同様のliから情報を補足（SSRされていれば拾える）
+			reward = ""
+			due = ""
+			created = ent.get("lastmod", "")
+			for li in soup.find_all("li"):
+				qa = li.get("qa-content", "")
+				txt = li.get_text(" ", strip=True)
+				icon = li.find("i")
+				icon_classes = " ".join(icon.get("class", [])) if icon else ""
+				if qa == "created" and not created:
+					created = txt.replace("作成日:", "").strip()
+				if not due and (qa == "due-date" or "i-mdi-calendar-month" in icon_classes or "i-mdi-calendar" in icon_classes):
+					sp = li.find("span")
+					due = (sp.get_text(" ", strip=True) if sp else txt).strip()
+				if not reward and ("¥" in txt or "i-mdi-tag" in icon_classes):
+					mny = re.search(r"¥[\d,]+(?:\s*〜\s*¥[\d,]+)?", txt)
+					reward = (mny.group(0) if mny else txt).strip()
 			items.append({
 				"id": ent["id"],
 				"url": url,
 				"title": title,
 				"description": "",
 				"labels": [],
-				"created": ent.get("lastmod", ""),
-				"due": "",
-				"reward": "",
+				"created": created,
+				"due": due,
+				"reward": reward,
 			})
 		finally:
 			# Crawl-delay
