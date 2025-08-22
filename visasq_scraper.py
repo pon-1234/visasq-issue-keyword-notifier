@@ -14,6 +14,13 @@ from xml.etree import ElementTree as ET
 import requests
 from bs4 import BeautifulSoup
 
+# Playwright（オプション）
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+
 # ===== 設定 =====
 TARGET_URL = "https://expert.visasq.com/issue/?is_started_only=true"
 BASE_ORIGIN = "https://expert.visasq.com"
@@ -38,6 +45,7 @@ HEADERS = {
 # テスト用フラグ（環境変数）
 FORCE_NOTIFY = os.getenv("FORCE_NOTIFY") == "1"  # 既読無視で通知
 DRY_RUN = os.getenv("DRY_RUN") == "1"            # Slack送信せずpayload出力のみ
+ENABLE_BROWSER = os.getenv("ENABLE_BROWSER") == "1"  # 動的DOMレンダリング（Playwright）を使用
 
 
 def load_seen_ids() -> set:
@@ -59,14 +67,32 @@ def save_seen_ids(seen: set) -> None:
 
 
 def fetch_html(url: str) -> str:
-	# 軽いリトライ
-	for i in range(3):
-		resp = requests.get(url, headers=HEADERS, timeout=20)
-		if resp.status_code == 200 and resp.text:
-			return resp.text
-		time.sleep(1 + i)
-	resp.raise_for_status()
-	return resp.text
+	if ENABLE_BROWSER and PLAYWRIGHT_AVAILABLE:
+		# Playwrightを使用して動的DOMをレンダリング
+		browser = None
+		try:
+			playwright = sync_playwright()
+			browser = playwright.chromium.launch()
+			context = browser.new_context()
+			page = context.new_page()
+			page.goto(url, wait_until="networkidle")
+			html = page.content
+			return html
+		except Exception as e:
+			print(f"[ERROR] PlaywrightでHTMLを取得できませんでした: {e}")
+			return ""
+		finally:
+			if browser:
+				browser.close()
+	else:
+		# Requestsを使用して静的HTMLを取得
+		for i in range(3):
+			resp = requests.get(url, headers=HEADERS, timeout=20)
+			if resp.status_code == 200 and resp.text:
+				return resp.text
+			time.sleep(1 + i)
+		resp.raise_for_status()
+		return resp.text
 
 
 def normalize_text(s: str) -> str:
@@ -206,19 +232,23 @@ def build_items_from_sitemap(max_fetch: int = 30) -> list[dict]:
 			reward = ""
 			due = ""
 			created = ent.get("lastmod", "")
+			# 個別ページの詳細情報を抽出
 			for li in soup.find_all("li"):
 				qa = li.get("qa-content", "")
 				txt = li.get_text(" ", strip=True)
 				icon = li.find("i")
 				icon_classes = " ".join(icon.get("class", [])) if icon else ""
-				if qa == "created" and not created:
+				if qa == "created":
 					created = txt.replace("作成日:", "").strip()
-				if not due and (qa == "due-date" or "i-mdi-calendar-month" in icon_classes or "i-mdi-calendar" in icon_classes):
+				if qa == "due-date" or "i-mdi-calendar-month" in icon_classes or "i-mdi-calendar" in icon_classes:
 					sp = li.find("span")
 					due = (sp.get_text(" ", strip=True) if sp else txt).strip()
-				if not reward and ("¥" in txt or "i-mdi-tag" in icon_classes):
+				if "¥" in txt or "i-mdi-tag" in icon_classes:
 					mny = re.search(r"¥[\d,]+(?:\s*〜\s*¥[\d,]+)?", txt)
 					reward = (mny.group(0) if mny else txt).strip()
+			# デバッグ用（最初の数件のみ）
+			if i <= 3:
+				print(f"[DEBUG] {ent['id']}: reward='{reward}' due='{due}' created='{created}'")
 			items.append({
 				"id": ent["id"],
 				"url": url,
