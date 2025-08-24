@@ -69,21 +69,18 @@ def save_seen_ids(seen: set) -> None:
 def fetch_html(url: str) -> str:
 	if ENABLE_BROWSER and PLAYWRIGHT_AVAILABLE:
 		# Playwrightを使用して動的DOMをレンダリング
-		browser = None
 		try:
-			playwright = sync_playwright()
-			browser = playwright.chromium.launch()
-			context = browser.new_context()
-			page = context.new_page()
-			page.goto(url, wait_until="networkidle")
-			html = page.content
-			return html
+			with sync_playwright() as p:
+				browser = p.chromium.launch()
+				context = browser.new_context()
+				page = context.new_page()
+				page.goto(url, wait_until="networkidle")
+				html = page.content()
+				browser.close()
+				return html
 		except Exception as e:
 			print(f"[ERROR] PlaywrightでHTMLを取得できませんでした: {e}")
 			return ""
-		finally:
-			if browser:
-				browser.close()
 	else:
 		# Requestsを使用して静的HTMLを取得
 		for i in range(3):
