@@ -225,6 +225,15 @@ def build_items_from_sitemap(max_fetch: int = 30) -> list[dict]:
 			title = title_tag.get_text(strip=True) if title_tag else ""
 			# サイト名のサフィックスは落とす
 			title = re.sub(r"\s*\|\s*.*$", "", title)
+			
+			# meta descriptionを取得
+			description = ""
+			meta_desc = soup.find("meta", attrs={"name": "description"})
+			if not meta_desc:
+				meta_desc = soup.find("meta", attrs={"property": "og:description"})
+			if meta_desc:
+				description = meta_desc.get("content", "")
+			
 			# 一覧と同様のliから情報を補足（SSRされていれば拾える）
 			reward = ""
 			due = ""
@@ -250,7 +259,7 @@ def build_items_from_sitemap(max_fetch: int = 30) -> list[dict]:
 				"id": ent["id"],
 				"url": url,
 				"title": title,
-				"description": "",
+				"description": description,
 				"labels": [],
 				"created": created,
 				"due": due,
