@@ -225,6 +225,12 @@ def build_items_from_sitemap(max_fetch: int = 30) -> list[dict]:
 			title = title_tag.get_text(strip=True) if title_tag else ""
 			# サイト名のサフィックスは落とす
 			title = re.sub(r"\s*\|\s*.*$", "", title)
+			# タイトルが空の場合のフォールバック
+			if not title:
+				title = f"Issue {ent['id']}"
+			# デバッグ: タイトル取得状況を出力
+			if i <= 3:
+				print(f"[DEBUG] {ent['id']}: title='{title}'")
 			
 			# meta descriptionを取得
 			description = ""
@@ -252,9 +258,6 @@ def build_items_from_sitemap(max_fetch: int = 30) -> list[dict]:
 				if "¥" in txt or "i-mdi-tag" in icon_classes:
 					mny = re.search(r"¥[\d,]+(?:\s*〜\s*¥[\d,]+)?", txt)
 					reward = (mny.group(0) if mny else txt).strip()
-			# デバッグ用（最初の数件のみ）
-			if i <= 3:
-				print(f"[DEBUG] {ent['id']}: reward='{reward}' due='{due}' created='{created}'")
 			items.append({
 				"id": ent["id"],
 				"url": url,
