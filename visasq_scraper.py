@@ -100,63 +100,107 @@ def normalize_text(s: str) -> str:
 def extract_items(html: str) -> list[dict]:
 	"""
 	公募カード<a href="/issue/123456/">…</a> を起点に抽出。
-	class名の変更に強いよう、構造／属性ベースで取得します。
+	2025年9月のUI変更に対応。
 	"""
 	soup = BeautifulSoup(html, "html.parser")
 	items = []
 
-	# href="/issue/数字/" のaタグを全て拾う
-	link_tags = soup.find_all("a", href=re.compile(r"^/issue/\d+/?$"))
+	# 新しいUI構造: <li>内の<a class="_link_1ws1l_1" href="/issue/数字/">
+	# または <a class="_link_1fzqm_1" href="/direct_interview/数字/">
+	link_tags = soup.find_all("a", href=re.compile(r"^/(issue|direct_interview)/\d+/?$"))
+	
 	for a in link_tags:
 		href = a.get("href", "")
-		m = re.search(r"/issue/(\d+)", href)
+		# issue番号またはdirect_interview番号を抽出
+		m = re.search(r"/(issue|direct_interview)/(\d+)", href)
 		if not m:
 			continue
-		issue_id = m.group(1)
+		issue_type = m.group(1)
+		issue_id = m.group(2)
 		url = BASE_ORIGIN + href
 
-		# タイトル
-		h3 = a.find("h3")
-		title = h3.get_text(strip=True) if h3 else ""
+		# タイトル: <p class="_title_1ws1l_21"> または <p class="_title_1fzqm_21">
+		title_p = a.find("p", class_=re.compile(r"_title_\w+_\d+"))
+		title = title_p.get_text(strip=True) if title_p else ""
 
-		# 要約（説明文と思われる<p>を優先的に1つ抽出）
-		# クラス名に依存しすぎないよう、子孫pのうち「長めのテキスト」を採用
-		candidate_ps = [p.get_text(" ", strip=True) for p in a.find_all("p")]
+		# 説明文は新UIにはないが、カード内のテキストを探す
 		description = ""
-		if candidate_ps:
-			# 一番文字数が多いものを要約とみなす
-			description = max(candidate_ps, key=lambda s: len(s))
-
-		# ラベル（NEW/締め切り間近など）
+		
+		# ラベル（NEW/インタビューなど）: <span class="_label_...">
 		labels = []
-		for sp in a.find_all("span"):
-			if sp.has_attr("qa-label") or "label" in " ".join(sp.get("class", [])):
-				t = sp.get_text(strip=True)
-				if t:
-					labels.append(t)
+		for span in a.find_all("span", class_=re.compile(r"_label_")):
+			label_text = span.get_text(strip=True)
+			if label_text and label_text not in ["NEW"]:  # NEWは別途処理
+				labels.append(label_text)
 
-		# 作成日・締切・報酬など（<li qa-content="..."> を優先）
+		# NEWラベルの有無
+		new_label = a.find("span", string=re.compile(r"^\s*NEW\s*$"))
+		if new_label:
+			labels.insert(0, "NEW")
+
+		# 募集期間: "募集期間：2025/08/31 〜 2025/09/07" のようなテキスト
 		created = ""
 		due = ""
+		period_text = ""
+		for p in a.find_all("p"):
+			text = p.get_text(strip=True)
+			if "募集期間：" in text:
+				period_text = text.replace("募集期間：", "").strip()
+				# 期間から締切日を抽出（終了日）
+				period_match = re.search(r"〜\s*(\d{4}/\d{2}/\d{2})", period_text)
+				if period_match:
+					due = period_match.group(1)
+				# 開始日も取得
+				start_match = re.search(r"(\d{4}/\d{2}/\d{2})\s*〜", period_text)
+				if start_match:
+					created = start_match.group(1)
+				break
+
+		# 報酬: <i class="i-mdi-cash-multiple">の親要素のテキスト
 		reward = ""
-		for li in a.find_all("li"):
-			qa = li.get("qa-content", "")
-			txt = li.get_text(" ", strip=True)
-			# アイコンのclassを確認（例: i-mdi-tag / i-mdi-calendar-month）
-			icon = li.find("i")
-			icon_classes = " ".join(icon.get("class", [])) if icon else ""
-			if qa == "created":
-				# 例: "作成日: 2025年08月18日"
-				created = txt.replace("作成日:", "").strip()
-			# 締切（due）は qa="due-date" またはカレンダーアイコンで判定
-			if not due and (qa == "due-date" or "i-mdi-calendar-month" in icon_classes or "i-mdi-calendar" in icon_classes):
-				sp = li.find("span")
-				due = (sp.get_text(" ", strip=True) if sp else txt).strip()
-			# 報酬（reward）は通貨記号 or タグアイコンで判定
-			if not reward and ("¥" in txt or "i-mdi-tag" in icon_classes):
-				# 金額だけを抜き出せれば抜く
-				mny = re.search(r"¥[\d,]+(?:\s*〜\s*¥[\d,]+)?", txt)
-				reward = (mny.group(0) if mny else txt).strip()
+		cash_icon = a.find("i", class_="i-mdi-cash-multiple")
+		if cash_icon:
+			# 親のpタグからテキストを取得
+			parent_p = cash_icon.find_parent("p")
+			if parent_p:
+				reward_text = parent_p.get_text(strip=True)
+				# "1.5万円 〜 2.5万円 （税抜）" のような形式を抽出
+				reward_match = re.search(r"([\d.]+万円.*?（税抜）)", reward_text)
+				if reward_match:
+					reward = reward_match.group(1)
+
+		# 時間: <i class="i-mdi-clock-time-five-outline">の親要素
+		meeting_time = ""
+		time_icon = a.find("i", class_="i-mdi-clock-time-five-outline")
+		if time_icon:
+			parent_p = time_icon.find_parent("p")
+			if parent_p:
+				meeting_time = parent_p.get_text(strip=True)
+
+		# 人数: <i class="i-mdi-person">の親要素
+		num_people = ""
+		person_icon = a.find("i", class_="i-mdi-person")
+		if person_icon:
+			parent_p = person_icon.find_parent("p")
+			if parent_p:
+				num_people = parent_p.get_text(strip=True)
+
+		# 場所: <i class="i-mdi-map-marker">の親要素
+		location = ""
+		location_icon = a.find("i", class_="i-mdi-map-marker")
+		if location_icon:
+			parent_p = location_icon.find_parent("p")
+			if parent_p:
+				location = parent_p.get_text(strip=True)
+
+		# 会社情報: <div class="_company_info_...">
+		company_info = ""
+		company_div = a.find("div", class_=re.compile(r"_company_info_"))
+		if company_div:
+			company_info = company_div.get_text(strip=True)
+			# これを説明文として使用
+			if not description:
+				description = company_info
 
 		items.append({
 			"id": issue_id,
@@ -164,10 +208,15 @@ def extract_items(html: str) -> list[dict]:
 			"title": title,
 			"description": description,
 			"labels": labels,
-			"created": created,   # "2025年08月18日" など
-			"due": due,           # "08/20 まで" など
-			"reward": reward,     # "¥30,000 〜 ¥50,000" など
+			"created": created,   # 募集開始日
+			"due": due,           # 募集終了日
+			"reward": reward,     # 報酬額
+			"meeting_time": meeting_time,  # 面談時間
+			"num_people": num_people,      # 募集人数
+			"location": location,           # 場所
+			"company_info": company_info,  # 会社情報
 		})
+		
 	return items
 
 
