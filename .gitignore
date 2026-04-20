@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual envs
+venv/
+.venv/
+
+# Editor / tooling
+.serena/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Local dev scratch
+test_extraction.py
+test_new_ui.html
+test_title.py
